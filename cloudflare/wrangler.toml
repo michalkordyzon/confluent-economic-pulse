@@ -1,0 +1,20 @@
+name = "confluent-economic-pulse"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+[vars]
+RAW_TOPIC = "economic.raw"
+COLLECTOR_MODE = "all"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "economic-pulse"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[triggers]
+crons = [
+  "*/5 * * * *",
+  "7 * * * *",
+  "15 16 * * *",
+  "30 16 * * 4"
+]

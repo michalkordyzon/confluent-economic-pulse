@@ -1,0 +1,22 @@
+{
+  "connector.class": "HttpSourceV2",
+  "name": "economic-pulse-eia-source",
+  "kafka.auth.mode": "SERVICE_ACCOUNT",
+  "kafka.service.account.id": "<SERVICE_ACCOUNT_ID>",
+  "output.data.format": "JSON_SR",
+  "tasks.max": "1",
+  "http.api.base.url": "https://api.eia.gov",
+  "auth.type": "API_KEY",
+  "api.key.location": "QUERY",
+  "api.key.name": "api_key",
+  "api.key.value": "<EIA_API_KEY>",
+  "apis.num": "1",
+  "api1.http.api.path": "/v2/electricity/rto/region-data/data/",
+  "api1.http.request.method": "GET",
+  "api1.http.request.parameters": "frequency=hourly&data[0]=value&facets[respondent][]=US48&facets[type][]=D&sort[0][column]=period&sort[0][direction]=desc&length=1",
+  "api1.http.response.data.json.pointer": "/response/data",
+  "api1.http.offset.mode": "SNAPSHOT_PAGINATION",
+  "api1.http.request.interval.ms": "3600000",
+  "api1.topics": "raw.eia.demand",
+  "behavior.on.error": "FAIL"
+}

@@ -1,0 +1,19 @@
+{
+  "connector.class": "HttpSourceV2",
+  "name": "economic-pulse-nbp-source",
+  "kafka.auth.mode": "SERVICE_ACCOUNT",
+  "kafka.service.account.id": "<SERVICE_ACCOUNT_ID>",
+  "output.data.format": "JSON_SR",
+  "tasks.max": "1",
+  "http.api.base.url": "https://api.nbp.pl",
+  "auth.type": "NONE",
+  "apis.num": "1",
+  "api1.http.api.path": "/api/exchangerates/tables/A",
+  "api1.http.request.method": "GET",
+  "api1.http.request.parameters": "format=json",
+  "api1.http.response.data.json.pointer": "/0/rates",
+  "api1.http.offset.mode": "SNAPSHOT_PAGINATION",
+  "api1.http.request.interval.ms": "86400000",
+  "api1.topics": "raw.nbp.fx",
+  "behavior.on.error": "FAIL"
+}

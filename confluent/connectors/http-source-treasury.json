@@ -1,0 +1,19 @@
+{
+  "connector.class": "HttpSourceV2",
+  "name": "economic-pulse-treasury-source",
+  "kafka.auth.mode": "SERVICE_ACCOUNT",
+  "kafka.service.account.id": "<SERVICE_ACCOUNT_ID>",
+  "output.data.format": "JSON_SR",
+  "tasks.max": "1",
+  "http.api.base.url": "https://api.fiscaldata.treasury.gov",
+  "auth.type": "NONE",
+  "apis.num": "1",
+  "api1.http.api.path": "/services/api/fiscal_service/v2/accounting/od/debt_to_penny",
+  "api1.http.request.method": "GET",
+  "api1.http.request.parameters": "sort=-record_date&page[size]=1",
+  "api1.http.response.data.json.pointer": "/data",
+  "api1.http.offset.mode": "SNAPSHOT_PAGINATION",
+  "api1.http.request.interval.ms": "86400000",
+  "api1.topics": "raw.treasury.debt",
+  "behavior.on.error": "FAIL"
+}

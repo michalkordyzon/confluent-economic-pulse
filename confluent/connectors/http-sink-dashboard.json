@@ -1,0 +1,20 @@
+{
+  "connector.class": "HttpSinkV2",
+  "name": "economic-pulse-dashboard-sink",
+  "kafka.auth.mode": "SERVICE_ACCOUNT",
+  "kafka.service.account.id": "<SERVICE_ACCOUNT_ID>",
+  "topics": "economy_dashboard",
+  "input.data.format": "JSON_SR",
+  "tasks.max": "1",
+  "http.api.base.url": "https://<YOUR-WORKER>.workers.dev",
+  "auth.type": "NONE",
+  "https.ssl.enabled": "false",
+  "https.host.verifier.enabled": "true",
+  "behavior.on.error": "FAIL",
+  "apis.num": "1",
+  "api1.http.api.path": "/api/ingest",
+  "api1.http.request.method": "POST",
+  "api1.http.request.sensitive.headers": "Authorization:Bearer <DASHBOARD_INGEST_TOKEN>",
+  "api1.topics": "economy_dashboard",
+  "api1.max.retries": "5"
+}
