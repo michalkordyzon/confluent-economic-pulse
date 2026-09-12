@@ -73,6 +73,9 @@ cloudflare/
   wrangler.toml            Cron schedules and bindings
 
 confluent/
+  scripts/
+    up.sh                  Provision Confluent cluster, topics, service account, API key → writes .env
+    down.sh                Tear down all Confluent resources, scrub .env
   flink/01-normalize.sql   Parse raw Kafka JSON into a schemaful Flink table
   connectors/
     http-sink-dashboard.json
@@ -87,6 +90,81 @@ docs/
 
 .env.example
 ```
+
+## Confluent resource lifecycle (development)
+
+During development, spin Confluent resources up at the start of each session and tear them down at the end to avoid idle costs.
+
+### Prerequisites
+
+- [Confluent CLI](https://docs.confluent.io/confluent-cli/current/install.html) installed and logged in:
+  ```bash
+  confluent login
+  ```
+- `jq` installed (`brew install jq` on macOS)
+- A Confluent Cloud account with the `default` environment already created
+
+### Spin up
+
+```bash
+bash confluent/scripts/up.sh
+```
+
+This single command:
+
+1. Creates a Basic Kafka cluster (`economic-pulse`) in AWS `eu-central-1`
+2. Waits for it to reach `UP` status
+3. Creates the `economic.raw` topic (1 partition, 7-day retention)
+4. Creates a service account `economic-pulse-sa` with write/read access to the topic
+5. Creates a Kafka API key scoped to that service account
+6. Generates a random `DASHBOARD_INGEST_TOKEN`
+7. Writes all generated values into `.env` at the repo root
+
+The script is **idempotent** — if the cluster or service account already exists (e.g. after a cancelled run), it reuses them and continues from where it left off.
+
+After it completes, fill in the two external API keys in `.env` if not already set:
+
+```bash
+# Free registration at https://www.eia.gov/opendata/
+EIA_API_KEY=...
+
+# Free registration at https://fred.stlouisfed.org/docs/api/api_key.html
+FRED_API_KEY=...
+```
+
+Then push all secrets to the Cloudflare Worker:
+
+```bash
+set -a && source .env && set +a
+cd cloudflare
+echo "$CONFLUENT_REST_ENDPOINT" | npx wrangler secret put CONFLUENT_REST_ENDPOINT
+echo "$CONFLUENT_CLUSTER_ID"    | npx wrangler secret put CONFLUENT_CLUSTER_ID
+echo "$KAFKA_API_KEY"           | npx wrangler secret put KAFKA_API_KEY
+echo "$KAFKA_API_SECRET"        | npx wrangler secret put KAFKA_API_SECRET
+echo "$DASHBOARD_INGEST_TOKEN"  | npx wrangler secret put DASHBOARD_INGEST_TOKEN
+echo "$EIA_API_KEY"             | npx wrangler secret put EIA_API_KEY
+echo "$FRED_API_KEY"            | npx wrangler secret put FRED_API_KEY
+```
+
+### Tear down
+
+```bash
+bash confluent/scripts/down.sh
+```
+
+This deletes — after an explicit `yes` confirmation:
+
+- Kafka API key
+- Service account
+- Kafka cluster (and all its topics)
+
+It then scrubs the generated secrets from `.env` while preserving `EIA_API_KEY` and `FRED_API_KEY` (those are externally issued and do not need to be re-obtained each session).
+
+### Next session
+
+Run `up.sh` again. A new cluster and API key are created and `.env` is updated. Re-push secrets to the Worker as shown above — the Worker subdomain and D1 database persist between sessions.
+
+> **Note:** To change the cloud region, edit the `REGION` variable at the top of `confluent/scripts/up.sh` before running it.
 
 ## Fastest demo setup
 

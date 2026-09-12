@@ -68,7 +68,7 @@ if [[ -n "$EXISTING_CLUSTER" ]]; then
   CLUSTER_ID="$EXISTING_CLUSTER"
   ok "Cluster '$CLUSTER_NAME' already exists: $CLUSTER_ID — reusing."
 else
-  info "Creating Kafka cluster '$CLUSTER_NAME' ($CLUSTER_TYPE, $CLOUD $REGION)…"
+  info "Creating Kafka cluster '$CLUSTER_NAME' ($CLUSTER_TYPE, $CLOUD $REGION)..."
   CLUSTER_JSON=$(confluent kafka cluster create "$CLUSTER_NAME" \
     --cloud "$CLOUD" \
     --region "$REGION" \
@@ -82,14 +82,14 @@ else
 fi
 
 # Wait until the cluster is RUNNING before creating topics / API keys
-info "Waiting for cluster to become RUNNING…"
+info "Waiting for cluster to become RUNNING..."
 for i in $(seq 1 30); do
   STATUS=$(confluent kafka cluster describe "$CLUSTER_ID" --environment "$ENV_ID" -o json | jq -r '.status')
   if [[ "$STATUS" == "UP" ]]; then
     ok "Cluster is UP."
     break
   fi
-  echo "   status=$STATUS, waiting 10 s… ($i/30)"
+  echo "   status=$STATUS, waiting 10 s... ($i/30)"
   sleep 10
 done
 
@@ -104,7 +104,7 @@ ok "REST endpoint: $REST_ENDPOINT"
 
 # ── Create Kafka topics ───────────────────────────────────────────────────────
 for TOPIC in "${TOPICS[@]}"; do
-  info "Creating topic '$TOPIC'…"
+  info "Creating topic '$TOPIC'..."
   confluent kafka topic create "$TOPIC" \
     --partitions 1 \
     --config "retention.ms=604800000" \
@@ -114,17 +114,25 @@ for TOPIC in "${TOPICS[@]}"; do
   ok "Topic '$TOPIC' ready."
 done
 
-# ── Create service account ────────────────────────────────────────────────────
-info "Creating service account '$SA_NAME'…"
-SA_JSON=$(confluent iam service-account create "$SA_NAME" \
-  --description "economic-pulse demo service account" \
-  -o json)
-SA_ID=$(echo "$SA_JSON" | jq -r '.id')
-[[ -z "$SA_ID" || "$SA_ID" == "null" ]] && err "Failed to create service account."
-ok "Service account created: $SA_ID"
+# ── Create service account (idempotent — reuse if already exists) ─────────────
+EXISTING_SA=$(confluent iam service-account list -o json | \
+  jq -r --arg name "$SA_NAME" '.[] | select(.name == $name) | .id' | head -1)
+
+if [[ -n "$EXISTING_SA" ]]; then
+  SA_ID="$EXISTING_SA"
+  ok "Service account '$SA_NAME' already exists: $SA_ID -- reusing."
+else
+  info "Creating service account '$SA_NAME'..."
+  SA_JSON=$(confluent iam service-account create "$SA_NAME" \
+    --description "economic-pulse demo service account" \
+    -o json)
+  SA_ID=$(echo "$SA_JSON" | jq -r '.id')
+  [[ -z "$SA_ID" || "$SA_ID" == "null" ]] && err "Failed to create service account."
+  ok "Service account created: $SA_ID"
+fi
 
 # ── Grant DeveloperWrite role on the cluster ──────────────────────────────────
-info "Granting DeveloperWrite to $SA_ID on cluster $CLUSTER_ID…"
+info "Granting DeveloperWrite to $SA_ID on cluster $CLUSTER_ID..."
 confluent iam rbac role-binding create \
   --principal "ServiceAccount:$SA_ID" \
   --role DeveloperWrite \
@@ -147,7 +155,7 @@ confluent iam rbac role-binding create \
 ok "RBAC role bindings applied."
 
 # ── Create Kafka API key for the service account ──────────────────────────────
-info "Creating Kafka API key for service account $SA_ID…"
+info "Creating Kafka API key for service account $SA_ID..."
 APIKEY_JSON=$(confluent api-key create \
   --resource "$CLUSTER_ID" \
   --service-account "$SA_ID" \
@@ -163,7 +171,7 @@ DASHBOARD_INGEST_TOKEN=$(openssl rand -hex 32)
 ok "Generated DASHBOARD_INGEST_TOKEN."
 
 # ── Write .env ────────────────────────────────────────────────────────────────
-info "Writing secrets to $ENV_FILE…"
+info "Writing secrets to $ENV_FILE..."
 
 # Preserve EIA_API_KEY and FRED_API_KEY if already present in .env
 EXISTING_EIA=""
