@@ -63,20 +63,20 @@ read -r -p "Type 'yes' to confirm deletion: " CONFIRM
 
 # ── Delete Kafka API key ──────────────────────────────────────────────────────
 if [[ -n "$KAFKA_API_KEY" ]]; then
-  info "Deleting Kafka API key $KAFKA_API_KEY…"
+  info "Deleting Kafka API key $KAFKA_API_KEY..."
   confluent api-key delete "$KAFKA_API_KEY" --force 2>/dev/null && ok "API key deleted." || warn "API key deletion failed (may already be gone)."
 fi
 
 # ── Delete service account ────────────────────────────────────────────────────
 if [[ -n "$CONFLUENT_SERVICE_ACCOUNT_ID" ]]; then
-  info "Deleting service account $CONFLUENT_SERVICE_ACCOUNT_ID…"
+  info "Deleting service account $CONFLUENT_SERVICE_ACCOUNT_ID..."
   confluent iam service-account delete "$CONFLUENT_SERVICE_ACCOUNT_ID" --force 2>/dev/null \
     && ok "Service account deleted." \
     || warn "Service account deletion failed (may already be gone)."
 fi
 
 # ── Delete Kafka cluster ──────────────────────────────────────────────────────
-info "Deleting Kafka cluster $CONFLUENT_CLUSTER_ID…"
+info "Deleting Kafka cluster $CONFLUENT_CLUSTER_ID..."
 confluent kafka cluster delete "$CONFLUENT_CLUSTER_ID" \
   --environment "$CONFLUENT_ENVIRONMENT_ID" \
   --force 2>/dev/null \
@@ -84,7 +84,7 @@ confluent kafka cluster delete "$CONFLUENT_CLUSTER_ID" \
   || warn "Cluster deletion failed (may already be gone)."
 
 # ── Scrub .env — remove Confluent-generated values, keep external API keys ────
-info "Scrubbing generated secrets from $ENV_FILE…"
+info "Scrubbing generated secrets from $ENV_FILE..."
 
 # Preserve only external API keys that user obtained manually
 EIA_API_KEY=$(grep "^EIA_API_KEY=" "$ENV_FILE" | cut -d= -f2- || true)
@@ -114,18 +114,65 @@ EOF
 
 ok ".env scrubbed (external API keys preserved)."
 
-# ── Done ──────────────────────────────────────────────────────────────────────
+# ── Health check — verify resources are actually gone ─────────────────────────
+info "Running teardown checks..."
+HEALTH_ERRORS=0
+
+# 1. Cluster is gone
+CLUSTER_STILL_EXISTS=$(confluent kafka cluster list --environment "$CONFLUENT_ENVIRONMENT_ID" -o json 2>/dev/null | \
+  jq -r --arg id "$CONFLUENT_CLUSTER_ID" '.[] | select(.id == $id) | .id' || echo "")
+if [[ -z "$CLUSTER_STILL_EXISTS" ]]; then
+  ok "CHECK cluster $CONFLUENT_CLUSTER_ID is gone"
+else
+  echo "✗  FAIL  cluster $CONFLUENT_CLUSTER_ID still exists" >&2
+  HEALTH_ERRORS=$((HEALTH_ERRORS + 1))
+fi
+
+# 2. Service account is gone
+if [[ -n "$CONFLUENT_SERVICE_ACCOUNT_ID" ]]; then
+  SA_STILL_EXISTS=$(confluent iam service-account list -o json 2>/dev/null | \
+    jq -r --arg id "$CONFLUENT_SERVICE_ACCOUNT_ID" '.[] | select(.id == $id) | .id' || echo "")
+  if [[ -z "$SA_STILL_EXISTS" ]]; then
+    ok "CHECK service account $CONFLUENT_SERVICE_ACCOUNT_ID is gone"
+  else
+    echo "✗  FAIL  service account $CONFLUENT_SERVICE_ACCOUNT_ID still exists" >&2
+    HEALTH_ERRORS=$((HEALTH_ERRORS + 1))
+  fi
+fi
+
+# 3. .env generated values are cleared
+for VAR in CONFLUENT_CLUSTER_ID CONFLUENT_REST_ENDPOINT KAFKA_API_KEY KAFKA_API_SECRET DASHBOARD_INGEST_TOKEN; do
+  VAL=$(grep "^${VAR}=" "$ENV_FILE" | cut -d= -f2- || true)
+  if [[ -z "$VAL" ]]; then
+    ok "CHECK $VAR is cleared in .env"
+  else
+    echo "✗  FAIL  $VAR still has a value in .env: $VAL" >&2
+    HEALTH_ERRORS=$((HEALTH_ERRORS + 1))
+  fi
+done
+
+# ── Final result ──────────────────────────────────────────────────────────────
 echo ""
-echo "════════════════════════════════════════════════════════════"
-echo "  Confluent resources deleted."
-echo ""
-echo "  Note: Cloudflare Worker secrets still point at the old"
-echo "  cluster. After running up.sh tomorrow, re-push secrets:"
-echo "    set -a && source .env && set +a"
-echo "    cd cloudflare"
-echo '    echo "$CONFLUENT_REST_ENDPOINT" | npx wrangler secret put CONFLUENT_REST_ENDPOINT'
-echo '    echo "$CONFLUENT_CLUSTER_ID"    | npx wrangler secret put CONFLUENT_CLUSTER_ID'
-echo '    echo "$KAFKA_API_KEY"           | npx wrangler secret put KAFKA_API_KEY'
-echo '    echo "$KAFKA_API_SECRET"        | npx wrangler secret put KAFKA_API_SECRET'
-echo '    echo "$DASHBOARD_INGEST_TOKEN"  | npx wrangler secret put DASHBOARD_INGEST_TOKEN'
-echo "════════════════════════════════════════════════════════════"
+if [[ $HEALTH_ERRORS -eq 0 ]]; then
+  echo "════════════════════════════════════════════════════════════"
+  echo "  ALL CHECKS PASSED — Confluent resources fully deleted"
+  echo "  .env cleared (EIA_API_KEY / FRED_API_KEY preserved)"
+  echo ""
+  echo "  Note: Cloudflare Worker secrets still point at the old"
+  echo "  cluster. After running ep-up tomorrow, re-push secrets:"
+  echo "    set -a && source .env && set +a"
+  echo "    cd cloudflare"
+  echo '    echo "$CONFLUENT_REST_ENDPOINT" | npx wrangler secret put CONFLUENT_REST_ENDPOINT'
+  echo '    echo "$CONFLUENT_CLUSTER_ID"    | npx wrangler secret put CONFLUENT_CLUSTER_ID'
+  echo '    echo "$KAFKA_API_KEY"           | npx wrangler secret put KAFKA_API_KEY'
+  echo '    echo "$KAFKA_API_SECRET"        | npx wrangler secret put KAFKA_API_SECRET'
+  echo '    echo "$DASHBOARD_INGEST_TOKEN"  | npx wrangler secret put DASHBOARD_INGEST_TOKEN'
+  echo "════════════════════════════════════════════════════════════"
+else
+  echo "════════════════════════════════════════════════════════════"
+  echo "  TEARDOWN INCOMPLETE — $HEALTH_ERRORS check(s) failed (see above)"
+  echo "  Some resources may still be running and incurring costs."
+  echo "  Check Confluent Cloud UI and delete manually if needed."
+  echo "════════════════════════════════════════════════════════════"
+  exit 1
+fi

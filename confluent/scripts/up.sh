@@ -205,28 +205,90 @@ EOF
 
 ok ".env written."
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# ── Health check — verify everything is actually reachable ────────────────────
+info "Running health checks..."
+HEALTH_ERRORS=0
+
+# 1. Cluster is UP
+LIVE_STATUS=$(confluent kafka cluster describe "$CLUSTER_ID" --environment "$ENV_ID" -o json 2>/dev/null | jq -r '.status' || echo "ERROR")
+if [[ "$LIVE_STATUS" == "UP" ]]; then
+  ok "CHECK cluster $CLUSTER_ID is UP"
+else
+  echo "✗  FAIL  cluster status = $LIVE_STATUS" >&2
+  HEALTH_ERRORS=$((HEALTH_ERRORS + 1))
+fi
+
+# 2. Topic exists
+TOPIC_EXISTS=$(confluent kafka topic list --cluster "$CLUSTER_ID" --environment "$ENV_ID" -o json 2>/dev/null | \
+  jq -r '.[] | select(.name == "economic.raw") | .name' || echo "")
+if [[ "$TOPIC_EXISTS" == "economic.raw" ]]; then
+  ok "CHECK topic 'economic.raw' exists"
+else
+  echo "✗  FAIL  topic 'economic.raw' not found" >&2
+  HEALTH_ERRORS=$((HEALTH_ERRORS + 1))
+fi
+
+# 3. Service account exists
+SA_EXISTS=$(confluent iam service-account list -o json 2>/dev/null | \
+  jq -r --arg id "$SA_ID" '.[] | select(.id == $id) | .id' || echo "")
+if [[ "$SA_EXISTS" == "$SA_ID" ]]; then
+  ok "CHECK service account $SA_ID exists"
+else
+  echo "✗  FAIL  service account $SA_ID not found" >&2
+  HEALTH_ERRORS=$((HEALTH_ERRORS + 1))
+fi
+
+# 4. API key exists
+APIKEY_EXISTS=$(confluent api-key list --resource "$CLUSTER_ID" --environment "$ENV_ID" -o json 2>/dev/null | \
+  jq -r --arg key "$KAFKA_API_KEY" '.[] | select(.key == $key) | .key' || echo "")
+if [[ "$APIKEY_EXISTS" == "$KAFKA_API_KEY" ]]; then
+  ok "CHECK Kafka API key $KAFKA_API_KEY exists"
+else
+  echo "✗  FAIL  Kafka API key $KAFKA_API_KEY not found" >&2
+  HEALTH_ERRORS=$((HEALTH_ERRORS + 1))
+fi
+
+# 5. .env has no placeholder values for generated secrets
+for VAR in CONFLUENT_CLUSTER_ID CONFLUENT_REST_ENDPOINT KAFKA_API_KEY KAFKA_API_SECRET DASHBOARD_INGEST_TOKEN; do
+  VAL=$(grep "^${VAR}=" "$ENV_FILE" | cut -d= -f2- || true)
+  if [[ -z "$VAL" || "$VAL" == *"<"* ]]; then
+    echo "✗  FAIL  $VAR is empty or still a placeholder in .env" >&2
+    HEALTH_ERRORS=$((HEALTH_ERRORS + 1))
+  else
+    ok "CHECK $VAR is set in .env"
+  fi
+done
+
+# ── Final result ──────────────────────────────────────────────────────────────
 echo ""
-echo "════════════════════════════════════════════════════════════"
-echo "  Confluent cluster ready"
-echo "  Cluster ID   : $CLUSTER_ID"
-echo "  REST endpoint: $REST_ENDPOINT"
-echo "  Service acct : $SA_ID"
-echo "  Topics       : ${TOPICS[*]}"
-echo ""
-echo "  All secrets written to: $ENV_FILE"
-echo ""
-echo "  Next steps:"
-echo "  1. Fill in EIA_API_KEY and FRED_API_KEY in .env if not already set"
-echo "  2. Push secrets to Cloudflare Worker:"
-echo "     set -a && source .env && set +a"
-echo "     cd cloudflare"
-echo '     echo "$CONFLUENT_REST_ENDPOINT" | npx wrangler secret put CONFLUENT_REST_ENDPOINT'
-echo '     echo "$CONFLUENT_CLUSTER_ID"    | npx wrangler secret put CONFLUENT_CLUSTER_ID'
-echo '     echo "$KAFKA_API_KEY"           | npx wrangler secret put KAFKA_API_KEY'
-echo '     echo "$KAFKA_API_SECRET"        | npx wrangler secret put KAFKA_API_SECRET'
-echo '     echo "$DASHBOARD_INGEST_TOKEN"  | npx wrangler secret put DASHBOARD_INGEST_TOKEN'
-echo '     echo "$EIA_API_KEY"             | npx wrangler secret put EIA_API_KEY'
-echo '     echo "$FRED_API_KEY"            | npx wrangler secret put FRED_API_KEY'
-echo "  3. Deploy the Worker: npx wrangler deploy"
-echo "════════════════════════════════════════════════════════════"
+if [[ $HEALTH_ERRORS -eq 0 ]]; then
+  echo "════════════════════════════════════════════════════════════"
+  echo "  ALL CHECKS PASSED — cluster is fully operational"
+  echo ""
+  echo "  Cluster ID   : $CLUSTER_ID"
+  echo "  REST endpoint: $REST_ENDPOINT"
+  echo "  Service acct : $SA_ID"
+  echo "  Topics       : ${TOPICS[*]}"
+  echo "  .env         : $ENV_FILE"
+  echo ""
+  echo "  Next steps:"
+  echo "  1. Fill in EIA_API_KEY and FRED_API_KEY in .env if not already set"
+  echo "  2. Push secrets to Cloudflare Worker:"
+  echo "     set -a && source .env && set +a"
+  echo "     cd cloudflare"
+  echo '     echo "$CONFLUENT_REST_ENDPOINT" | npx wrangler secret put CONFLUENT_REST_ENDPOINT'
+  echo '     echo "$CONFLUENT_CLUSTER_ID"    | npx wrangler secret put CONFLUENT_CLUSTER_ID'
+  echo '     echo "$KAFKA_API_KEY"           | npx wrangler secret put KAFKA_API_KEY'
+  echo '     echo "$KAFKA_API_SECRET"        | npx wrangler secret put KAFKA_API_SECRET'
+  echo '     echo "$DASHBOARD_INGEST_TOKEN"  | npx wrangler secret put DASHBOARD_INGEST_TOKEN'
+  echo '     echo "$EIA_API_KEY"             | npx wrangler secret put EIA_API_KEY'
+  echo '     echo "$FRED_API_KEY"            | npx wrangler secret put FRED_API_KEY'
+  echo "  3. Deploy the Worker: npx wrangler deploy"
+  echo "════════════════════════════════════════════════════════════"
+else
+  echo "════════════════════════════════════════════════════════════"
+  echo "  SETUP INCOMPLETE — $HEALTH_ERRORS check(s) failed (see above)"
+  echo "  Fix the issues and re-run: ep-up"
+  echo "════════════════════════════════════════════════════════════"
+  exit 1
+fi
