@@ -7,3 +7,5 @@
 - **NDJSON tolerance is intentional architecture**: HTTP Sink V2's batch mode may send NDJSON. The `extractEvents()` fallback path is load-bearing for high-throughput operation — do not remove it.
 - **`COLLECTOR_MODE` controls dual-ingestion prevention**: if sources are migrated to Confluent HTTP Source V2 one-by-one, the Worker and the connectors would double-collect. Set `COLLECTOR_MODE = "coingecko-only"` to limit the Worker to CoinGecko only.
 - **No horizontal scaling concern**: `tasks.max = 1` on the HTTP Sink V2 and D1 upsert-by-PK means concurrency is not a concern at demo scale.
+- **HTTP Sink V2 connector needs Schema Registry ACLs** beyond Kafka topic ACLs: the service account must also have Schema Registry access granted in the Confluent Cloud UI (Environment → Schema Registry → Access), not just Kafka ACLs. This is the most common source of connector FAILED status.
+- **Basic cluster limitation**: RBAC resource roles are not available on Confluent Basic clusters. Use native Kafka ACLs (`confluent kafka acl create`) instead. `up.sh` already does this but is missing the ACL entries for sink connector topics.

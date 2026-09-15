@@ -5,7 +5,9 @@
 # Reads cluster ID and service account ID from .env at the repo root.
 #
 # What this deletes:
+#   - HTTP Sink V2 connector
 #   - Kafka API key (from .env)
+#   - Schema Registry API key (from .env)
 #   - Service account (from .env)
 #   - Kafka cluster (from .env)
 #
@@ -18,6 +20,8 @@
 #   bash confluent/scripts/down.sh
 
 set -euo pipefail
+
+CONNECTOR_NAME="economic-pulse-dashboard-sink"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 info()  { echo "▶  $*"; }
@@ -43,6 +47,7 @@ CONFLUENT_CLUSTER_ID=$(grep "^CONFLUENT_CLUSTER_ID=" "$ENV_FILE" | cut -d= -f2- 
 CONFLUENT_ENVIRONMENT_ID=$(grep "^CONFLUENT_ENVIRONMENT_ID=" "$ENV_FILE" | cut -d= -f2- || true)
 CONFLUENT_SERVICE_ACCOUNT_ID=$(grep "^CONFLUENT_SERVICE_ACCOUNT_ID=" "$ENV_FILE" | cut -d= -f2- || true)
 KAFKA_API_KEY=$(grep "^KAFKA_API_KEY=" "$ENV_FILE" | cut -d= -f2- || true)
+SR_API_KEY=$(grep "^SR_API_KEY=" "$ENV_FILE" | cut -d= -f2- || true)
 
 [[ -z "$CONFLUENT_CLUSTER_ID" ]]        && err "CONFLUENT_CLUSTER_ID not found in .env"
 [[ -z "$CONFLUENT_ENVIRONMENT_ID" ]]    && err "CONFLUENT_ENVIRONMENT_ID not found in .env"
@@ -52,19 +57,44 @@ KAFKA_API_KEY=$(grep "^KAFKA_API_KEY=" "$ENV_FILE" | cut -d= -f2- || true)
 echo ""
 echo "════════════════════════════════════════════════════════════"
 echo "  This will PERMANENTLY DELETE:"
+echo "  Connector      : $CONNECTOR_NAME (if exists)"
 echo "  Cluster        : $CONFLUENT_CLUSTER_ID"
-echo "  Environment    : $CONFLUENT_ENVIRONMENT_ID"
 echo "  Service account: ${CONFLUENT_SERVICE_ACCOUNT_ID:-(not set)}"
 echo "  Kafka API key  : ${KAFKA_API_KEY:-(not set)}"
+echo "  SR API key     : ${SR_API_KEY:-(not set)}"
+echo "  (environment $CONFLUENT_ENVIRONMENT_ID is kept)"
 echo "════════════════════════════════════════════════════════════"
 echo ""
 read -r -p "Type 'yes' to confirm deletion: " CONFIRM
 [[ "$CONFIRM" == "yes" ]] || { echo "Aborted."; exit 0; }
 
+# ── Delete HTTP Sink V2 connector ─────────────────────────────────────────────
+info "Looking for connector '$CONNECTOR_NAME'..."
+CONNECTOR_ID=$(confluent connect cluster list \
+  --cluster "$CONFLUENT_CLUSTER_ID" \
+  --environment "$CONFLUENT_ENVIRONMENT_ID" \
+  -o json 2>/dev/null | jq -r --arg name "$CONNECTOR_NAME" '.[] | select(.name == $name) | .id' | head -1)
+
+if [[ -n "$CONNECTOR_ID" ]]; then
+  info "Deleting connector $CONNECTOR_ID..."
+  confluent connect cluster delete "$CONNECTOR_ID" \
+    --cluster "$CONFLUENT_CLUSTER_ID" \
+    --environment "$CONFLUENT_ENVIRONMENT_ID" \
+    --force 2>/dev/null && ok "Connector deleted." || warn "Connector deletion failed (may already be gone)."
+else
+  ok "No connector named '$CONNECTOR_NAME' found — skipping."
+fi
+
 # ── Delete Kafka API key ──────────────────────────────────────────────────────
 if [[ -n "$KAFKA_API_KEY" ]]; then
   info "Deleting Kafka API key $KAFKA_API_KEY..."
-  confluent api-key delete "$KAFKA_API_KEY" --force 2>/dev/null && ok "API key deleted." || warn "API key deletion failed (may already be gone)."
+  confluent api-key delete "$KAFKA_API_KEY" --force 2>/dev/null && ok "Kafka API key deleted." || warn "Kafka API key deletion failed (may already be gone)."
+fi
+
+# ── Delete Schema Registry API key ───────────────────────────────────────────
+if [[ -n "$SR_API_KEY" ]]; then
+  info "Deleting Schema Registry API key $SR_API_KEY..."
+  confluent api-key delete "$SR_API_KEY" --force 2>/dev/null && ok "SR API key deleted." || warn "SR API key deletion failed (may already be gone)."
 fi
 
 # ── Delete service account ────────────────────────────────────────────────────
@@ -82,37 +112,6 @@ confluent kafka cluster delete "$CONFLUENT_CLUSTER_ID" \
   --force 2>/dev/null \
   && ok "Cluster deleted." \
   || warn "Cluster deletion failed (may already be gone)."
-
-# ── Scrub .env — remove Confluent-generated values, keep external API keys ────
-info "Scrubbing generated secrets from $ENV_FILE..."
-
-# Preserve only external API keys that user obtained manually
-EIA_API_KEY=$(grep "^EIA_API_KEY=" "$ENV_FILE" | cut -d= -f2- || true)
-FRED_API_KEY=$(grep "^FRED_API_KEY=" "$ENV_FILE" | cut -d= -f2- || true)
-
-cat > "$ENV_FILE" <<EOF
-# Confluent resources deleted on $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-# Run confluent/scripts/up.sh to recreate.
-
-# Confluent Cloud — cleared
-CONFLUENT_ENVIRONMENT_ID=
-CONFLUENT_CLUSTER_ID=
-CONFLUENT_REST_ENDPOINT=
-CONFLUENT_SERVICE_ACCOUNT_ID=
-
-# Kafka API key — cleared
-KAFKA_API_KEY=
-KAFKA_API_SECRET=
-
-# Cloudflare Worker — cleared
-DASHBOARD_INGEST_TOKEN=
-
-# External API keys — preserved
-EIA_API_KEY=${EIA_API_KEY}
-FRED_API_KEY=${FRED_API_KEY}
-EOF
-
-ok ".env scrubbed (external API keys preserved)."
 
 # ── Health check — verify resources are actually gone ─────────────────────────
 info "Running teardown checks..."
@@ -140,37 +139,55 @@ if [[ -n "$CONFLUENT_SERVICE_ACCOUNT_ID" ]]; then
   fi
 fi
 
-# 3. .env generated values are cleared
-for VAR in CONFLUENT_CLUSTER_ID CONFLUENT_REST_ENDPOINT KAFKA_API_KEY KAFKA_API_SECRET DASHBOARD_INGEST_TOKEN; do
-  VAL=$(grep "^${VAR}=" "$ENV_FILE" | cut -d= -f2- || true)
-  if [[ -z "$VAL" ]]; then
-    ok "CHECK $VAR is cleared in .env"
-  else
-    echo "✗  FAIL  $VAR still has a value in .env: $VAL" >&2
-    HEALTH_ERRORS=$((HEALTH_ERRORS + 1))
-  fi
-done
-
 # ── Final result ──────────────────────────────────────────────────────────────
 echo ""
 if [[ $HEALTH_ERRORS -eq 0 ]]; then
+  # ── Clear Confluent values from .env (preserve external API keys) ───────────
+  info "Clearing Confluent secrets from $ENV_FILE..."
+
+  EXISTING_EIA=$(grep  "^EIA_API_KEY="  "$ENV_FILE" | cut -d= -f2- || true)
+  EXISTING_FRED=$(grep "^FRED_API_KEY=" "$ENV_FILE" | cut -d= -f2- || true)
+
+  cat > "$ENV_FILE" <<ENVEOF
+# Confluent resources deleted on $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# Run confluent/scripts/up.sh to recreate.
+
+# Confluent Cloud — cleared
+CONFLUENT_ENVIRONMENT_ID=
+CONFLUENT_CLUSTER_ID=
+CONFLUENT_REST_ENDPOINT=
+CONFLUENT_SERVICE_ACCOUNT_ID=
+
+# Kafka API key — cleared
+KAFKA_API_KEY=
+KAFKA_API_SECRET=
+
+# Schema Registry — cleared
+SR_ENDPOINT=
+SR_API_KEY=
+SR_API_SECRET=
+
+# Cloudflare Worker — cleared
+DASHBOARD_INGEST_TOKEN=
+
+# External API keys — preserved
+EIA_API_KEY=${EXISTING_EIA}
+FRED_API_KEY=${EXISTING_FRED}
+ENVEOF
+
+  ok ".env cleared (external API keys preserved)."
+
   echo "════════════════════════════════════════════════════════════"
   echo "  ALL CHECKS PASSED — Confluent resources fully deleted"
-  echo "  .env cleared (EIA_API_KEY / FRED_API_KEY preserved)"
+  echo "  .env cleared — Confluent values erased, API keys kept."
   echo ""
   echo "  Note: Cloudflare Worker secrets still point at the old"
-  echo "  cluster. After running ep-up tomorrow, re-push secrets:"
-  echo "    set -a && source .env && set +a"
-  echo "    cd cloudflare"
-  echo '    echo "$CONFLUENT_REST_ENDPOINT" | npx wrangler secret put CONFLUENT_REST_ENDPOINT'
-  echo '    echo "$CONFLUENT_CLUSTER_ID"    | npx wrangler secret put CONFLUENT_CLUSTER_ID'
-  echo '    echo "$KAFKA_API_KEY"           | npx wrangler secret put KAFKA_API_KEY'
-  echo '    echo "$KAFKA_API_SECRET"        | npx wrangler secret put KAFKA_API_SECRET'
-  echo '    echo "$DASHBOARD_INGEST_TOKEN"  | npx wrangler secret put DASHBOARD_INGEST_TOKEN'
+  echo "  cluster. After running up.sh, secrets are pushed automatically."
   echo "════════════════════════════════════════════════════════════"
 else
   echo "════════════════════════════════════════════════════════════"
   echo "  TEARDOWN INCOMPLETE — $HEALTH_ERRORS check(s) failed (see above)"
+  echo "  .env was NOT modified — fix the issues above first."
   echo "  Some resources may still be running and incurring costs."
   echo "  Check Confluent Cloud UI and delete manually if needed."
   echo "════════════════════════════════════════════════════════════"

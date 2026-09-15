@@ -320,7 +320,7 @@ async function ingest(request: Request, env: Env): Promise<Response> {
   const received = nowIso();
 
   for (const raw of events) {
-    const event = raw?.value ?? raw;
+    const event = (raw?.value !== null && typeof raw?.value === "object") ? raw.value : raw;
     if (!event?.metric) continue;
 
     await env.DB.prepare(`

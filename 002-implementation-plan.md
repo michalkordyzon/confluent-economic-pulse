@@ -59,7 +59,7 @@ The plan below preserves the current Worker path as the working default and adds
 
 ### 1.1 Create and migrate D1
 
-```bash
+```zsh
 cd cloudflare
 npm install
 npx wrangler d1 create economic-pulse
@@ -69,7 +69,7 @@ npx wrangler d1 execute economic-pulse --remote --file=./schema.sql
 
 ### 1.2 Set Worker secrets
 
-```bash
+```zsh
 npx wrangler secret put CONFLUENT_REST_ENDPOINT   # https://pkc-xxxxx.<region>.<cloud>.confluent.cloud:443
 npx wrangler secret put CONFLUENT_CLUSTER_ID       # lkc-xxxxx
 npx wrangler secret put KAFKA_API_KEY
@@ -91,7 +91,7 @@ Retention:   7 days (demo)
 
 ### 1.4 Deploy and smoke-test
 
-```bash
+```zsh
 npx wrangler deploy
 curl "https://YOUR-WORKER.workers.dev/api/collect?source=coingecko" \
   -H "Authorization: Bearer YOUR_DASHBOARD_INGEST_TOKEN"
@@ -103,7 +103,7 @@ Check `economic.raw` in Confluent Cloud UI to confirm two records arrived.
 
 ### 1.5 Verify all five sources manually
 
-```bash
+```zsh
 for src in coingecko eia nbp treasury fred; do
   curl -s "https://YOUR-WORKER.workers.dev/api/collect?source=$src" \
     -H "Authorization: Bearer YOUR_DASHBOARD_INGEST_TOKEN"
@@ -123,7 +123,7 @@ done
 In Confluent Cloud for Apache Flink, run:
 
 ```sql
-SHOW CREATE TABLE `economic.raw`;
+SHOW CREATE TABLE `default`.`economic-pulse`.`economic.raw`;
 ```
 
 Confirm the value column is named `val`. If it differs, update `01-normalize.sql` before proceeding.
@@ -134,14 +134,14 @@ Open `confluent/flink/01-normalize.sql` in the Flink SQL workspace and execute i
 
 This creates:
 - `economy_dashboard` table (schemaful, JSON Schema Registry, upsert by `metric`)
-- Continuous `INSERT INTO` job consuming from `economic.raw`
+- Continuous `INSERT INTO` job consuming from `` `default`.`economic-pulse`.`economic.raw` ``
 
 ### 2.3 Verify Flink output
 
 After triggering a collection, confirm rows appear in `economy_dashboard`:
 
 ```sql
-SELECT * FROM economy_dashboard LIMIT 10;
+SELECT * FROM `default`.`economic-pulse`.`economy_dashboard` LIMIT 10;
 ```
 
 **Exit condition:** Flink job running; `economy_dashboard` topic has records with all expected fields.
@@ -167,7 +167,7 @@ In Confluent Cloud UI: **Connectors → Add connector → HTTP Sink V2 → Uploa
 
 Or via Confluent CLI:
 
-```bash
+```zsh
 confluent connect cluster create --config-file confluent/connectors/http-sink-dashboard.json
 ```
 
@@ -334,7 +334,7 @@ CREATE INDEX IF NOT EXISTS idx_history_metric_time ON metric_history(metric, obs
 ```
 
 Apply migration:
-```bash
+```zsh
 npx wrangler d1 execute economic-pulse --remote --file=./schema.sql
 ```
 

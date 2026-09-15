@@ -9,7 +9,7 @@ COLLECTOR_MODE = "all"
 [[d1_databases]]
 binding = "DB"
 database_name = "economic-pulse"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "984b097a-f7d3-44ff-a4dc-1845f69ec098"
 
 [triggers]
 crons = [
