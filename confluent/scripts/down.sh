@@ -6,6 +6,7 @@
 #
 # What this deletes:
 #   - HTTP Sink V2 connector
+#   - Flink compute pools (in the environment)
 #   - Kafka API key (from .env)
 #   - Schema Registry API key (from .env)
 #   - Service account (from .env)
@@ -58,6 +59,7 @@ echo ""
 echo "════════════════════════════════════════════════════════════"
 echo "  This will PERMANENTLY DELETE:"
 echo "  Connector      : $CONNECTOR_NAME (if exists)"
+echo "  Compute pools  : all compute pools in $CONFLUENT_ENVIRONMENT_ID"
 echo "  Cluster        : $CONFLUENT_CLUSTER_ID"
 echo "  Service account: ${CONFLUENT_SERVICE_ACCOUNT_ID:-(not set)}"
 echo "  Kafka API key  : ${KAFKA_API_KEY:-(not set)}"
@@ -83,6 +85,23 @@ if [[ -n "$CONNECTOR_ID" ]]; then
     --force 2>/dev/null && ok "Connector deleted." || warn "Connector deletion failed (may already be gone)."
 else
   ok "No connector named '$CONNECTOR_NAME' found — skipping."
+fi
+
+# ── Delete Flink compute pools ────────────────────────────────────────────────
+info "Looking for Flink compute pools in environment $CONFLUENT_ENVIRONMENT_ID..."
+COMPUTE_POOL_IDS=$(confluent flink compute-pool list \
+  --environment "$CONFLUENT_ENVIRONMENT_ID" \
+  -o json 2>/dev/null | jq -r '.[].id // empty' || true)
+
+if [[ -n "$COMPUTE_POOL_IDS" ]]; then
+  for POOL_ID in $COMPUTE_POOL_IDS; do
+    info "Deleting compute pool $POOL_ID..."
+    confluent flink compute-pool delete "$POOL_ID" \
+      --environment "$CONFLUENT_ENVIRONMENT_ID" \
+      --force 2>/dev/null && ok "Compute pool $POOL_ID deleted." || warn "Compute pool $POOL_ID deletion failed."
+  done
+else
+  ok "No compute pools found in environment $CONFLUENT_ENVIRONMENT_ID — skipping."
 fi
 
 # ── Delete Kafka API key ──────────────────────────────────────────────────────
@@ -127,7 +146,17 @@ else
   HEALTH_ERRORS=$((HEALTH_ERRORS + 1))
 fi
 
-# 2. Service account is gone
+# 2. Compute pools are gone
+REMAINING_POOLS=$(confluent flink compute-pool list --environment "$CONFLUENT_ENVIRONMENT_ID" -o json 2>/dev/null | \
+  jq -r '.[].id // empty' || echo "")
+if [[ -z "$REMAINING_POOLS" ]]; then
+  ok "CHECK all compute pools in $CONFLUENT_ENVIRONMENT_ID are gone"
+else
+  echo "✗  FAIL  compute pool(s) still exist: $REMAINING_POOLS" >&2
+  HEALTH_ERRORS=$((HEALTH_ERRORS + 1))
+fi
+
+# 3. Service account is gone
 if [[ -n "$CONFLUENT_SERVICE_ACCOUNT_ID" ]]; then
   SA_STILL_EXISTS=$(confluent iam service-account list -o json 2>/dev/null | \
     jq -r --arg id "$CONFLUENT_SERVICE_ACCOUNT_ID" '.[] | select(.id == $id) | .id' || echo "")

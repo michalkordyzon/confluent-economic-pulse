@@ -164,16 +164,17 @@ acl --operations describe --cluster-scope
 acl --operations write,describe   --topic "economic.raw"
 acl --operations read,describe    --topic "economic.raw"
 
-# economy_dashboard — connector consumes
+# economy_dashboard — connector consumes and produces status records
 acl --operations read,describe    --topic "economy_dashboard"
+acl --operations write            --topic "economy_dashboard"
 acl --operations describe-configs --topic "economy_dashboard"
 
 # DLQ topics (connector creates these automatically)
 acl --operations create,write,read,describe --topic "dlq-" --prefix
 
 # success-lcc / error-lcc topics (HTTP Sink V2 creates these on startup)
-acl --operations create,write --topic "success-lcc" --prefix
-acl --operations create,write --topic "error-lcc"   --prefix
+acl --operations create,write,describe,read --topic "success-lcc" --prefix
+acl --operations create,write,describe,read --topic "error-lcc"   --prefix
 
 # Consumer group for the connector (connect-lcc-<connector-id>)
 acl --operations read,describe,delete --consumer-group "connect-lcc-" --prefix
